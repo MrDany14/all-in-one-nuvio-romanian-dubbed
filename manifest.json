@@ -1,12 +1,12 @@
 {
   "name": "All-in-One-Nuvio - Romanian Dubbed Only",
-  "version": "1.0.0-ro.1",
+  "version": "1.0.0-ro.2",
   "scrapers": [
     {
       "id": "romanian-dubbed-all",
       "name": "Romanian Dubbed Only",
       "description": "Aggregates the All-in-One providers and keeps only streams explicitly marked as Romanian audio or Romanian dubbed.",
-      "version": "1.0.0-ro.1",
+      "version": "1.0.0-ro.2",
       "author": "D3adlyRocket modification",
       "supportedTypes": ["movie", "tv"],
       "filename": "providers/romanian-dubbed.js",
