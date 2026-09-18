@@ -65,3 +65,110 @@ if (__provider && __provider.getStreams) {
         self.getStreams = __provider.getStreams;
     }
 }
+
+
+// Filter each provider in place. Nuvio runs providers independently, so this
+// preserves the original provider runtime instead of aggregating them.
+(function() {
+  var __nuvioOriginalGetStreams = module.exports && module.exports.getStreams;
+  if (typeof __nuvioOriginalGetStreams !== "function") return;
+
+  function __nuvioCollect(value, output, depth) {
+    if (value === null || value === undefined || depth > 3) return;
+    if (Array.isArray(value)) {
+      value.forEach(function(item) { __nuvioCollect(item, output, depth + 1); });
+      return;
+    }
+    if (typeof value === "object") {
+      Object.keys(value).forEach(function(key) {
+        __nuvioCollect(value[key], output, depth + 1);
+      });
+      return;
+    }
+    output.push(String(value));
+  }
+
+  function __nuvioStreamText(stream) {
+    var values = [];
+    [
+      "title", "name", "quality", "language", "languages", "lang",
+      "audio", "audioLanguage", "audioLanguages", "audioLang",
+      "audioTrack", "audioTracks", "tracks", "description", "size",
+      "label", "tags", "release", "releaseGroup", "group", "filename",
+      "fileName", "sourceName", "provider"
+    ].forEach(function(key) {
+      __nuvioCollect(stream && stream[key], values, 0);
+    });
+
+    // Some providers put the release filename in the final URL path segment.
+    var url = String(stream && stream.url || "").split(/[?#]/)[0];
+    var parts = url.split("/");
+    if (parts.length) values.push(parts[parts.length - 1]);
+    return values.join(" ");
+  }
+
+  function __nuvioHasRomanianMarker(text) {
+    return /\b(?:ro|rom|ron|rum|romanian|romana|română)\b/i.test(text) ||
+      /(?:ro|rom|ron|rum|romanian|romana|română)[\s._\-\[\]()]*dub|dub(?:bed|bing)?[\s._\-\[\]()]+(?:ro|rom|ron|rum|romanian|romana|română)/i.test(text);
+  }
+
+  function __nuvioIsMultiAudio(stream) {
+    if (!stream || typeof stream !== "object") return false;
+    var text = __nuvioStreamText(stream);
+    return /\b(?:multi|dual|multiple)[\s._\-]*audio\b/i.test(text);
+  }
+
+  function __nuvioPlaylistHasRomanian(text) {
+    var body = String(text || "");
+    return /(?:LANGUAGE|LANG|language|lang)\s*[=:]\s*["']?(?:ro|ron|rum)\b/i.test(body) ||
+      /(?:NAME|LABEL|TITLE|name|label|title)\s*[=:]\s*["'][^"']*(?:romanian|romana|română|\bro\b|\bron\b|\brum\b)[^"']*["']/i.test(body) ||
+      /\b(?:romanian|romana|română)\b/i.test(body);
+  }
+
+  function __nuvioProbePlaylist(stream) {
+    var url = String(stream && stream.url || "").split("|")[0];
+    if (!url || typeof fetch !== "function") return Promise.resolve(false);
+    var headers = stream && stream.headers && typeof stream.headers === "object" ? stream.headers : {};
+    return fetch(url, { method: "GET", headers: headers }).then(function(response) {
+      if (!response || typeof response.text !== "function") return false;
+      return response.text().then(function(body) {
+        return __nuvioPlaylistHasRomanian(body);
+      });
+    }).catch(function() {
+      return false;
+    });
+  }
+
+  function __nuvioKeepStream(stream) {
+    var text = __nuvioStreamText(stream);
+    if (__nuvioHasRomanianMarker(text)) return Promise.resolve(true);
+    if (!__nuvioIsMultiAudio(stream)) return Promise.resolve(false);
+    // Multi-audio is accepted only when its playlist explicitly advertises Romanian.
+    return __nuvioProbePlaylist(stream);
+  }
+
+  function __nuvioFilterStreams(streams) {
+    var items = Array.isArray(streams) ? streams : [];
+    var seen = {};
+    return Promise.all(items.map(function(stream) {
+      return __nuvioKeepStream(stream);
+    })).then(function(accepted) {
+      return items.filter(function(stream, index) {
+        var url = String(stream && stream.url || "");
+        if (!accepted[index] || !url || seen[url]) return false;
+        seen[url] = true;
+        return true;
+      });
+    });
+  }
+
+  module.exports.getStreams = function(id, type, season, episode) {
+    var self = this;
+    return Promise.resolve()
+      .then(function() {
+        return __nuvioOriginalGetStreams.call(self, id, type, season, episode);
+      })
+      .then(__nuvioFilterStreams)
+      .catch(function() { return []; });
+  };
+})();
